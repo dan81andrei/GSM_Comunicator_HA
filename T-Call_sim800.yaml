@@ -1,0 +1,164 @@
+esphome:
+  name: comunicator
+  platform: ESP32
+  board: esp-wrover-kit
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: x.x.x.x
+    gateway: x.x.x.x
+    subnet: x.x.x.x
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "ComunicatorGSM"
+    password: "xxxxxxx"
+
+logger:
+  level: debug
+  baud_rate: 0
+
+ota:
+
+api:
+  services:
+    - service: send_sms
+      variables:
+        recipient: string
+        message: string
+      then:
+        - sim800l.send_sms:
+            recipient: !lambda 'return recipient;'
+            message: !lambda 'return message;'
+    - service: dial
+      variables:
+        recipient: string
+      then:
+        - sim800l.dial:
+            recipient: !lambda 'return recipient;'
+    - service: connect
+      then:
+        - sim800l.connect
+    - service: disconnect
+      then:
+        - sim800l.disconnect
+    - service: send_ussd
+      variables:
+        ussdCode: string
+      then:
+        - sim800l.send_ussd:
+            ussd: !lambda 'return ussdCode;'
+
+binary_sensor:
+- platform: sim800l
+  registered:
+    name: "Sim800L Registered"
+- platform: template
+  name: Router Power
+  id: power_router
+  internal: true
+  lambda: |-
+      if (id(reset_router).state) {
+        return true;
+      } else {
+        return false;
+      }
+- platform: template
+  name: Server Power
+  id: power_server
+  internal: true
+  lambda: |-
+      if (id(reset_server).state) {
+        return true;
+      } else {
+        return false;
+      }
+
+uart:
+  baud_rate: 9600
+  tx_pin: 27
+  rx_pin: 26
+
+switch:
+  - platform: gpio
+    id: "key_pin"
+    pin: 4
+    restore_mode: ALWAYS_OFF
+  - platform: gpio
+    id: "reset_pin"
+    pin: 5
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    id: "power_pin"
+    pin: 23
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    id: "reset_router"
+    pin: 14
+  - platform: gpio
+    id: "reset_server"
+    pin: 12
+
+sim800l:
+  on_sms_received:
+    - lambda: |-
+        id(sms_sender).publish_state(sender);
+        id(sms_message).publish_state(message);
+    - lambda: |-
+        if ( (id(sms_sender).state == "+4073xxxxxxx") && ( (id(sms_message).state == "Router_power_OFF") ) ) {
+          id(reset_router).turn_on();
+          id(releu_router).publish_state(message);
+        };
+        
+    - lambda: |-
+        if ( (id(sms_sender).state == "+4073xxxxxxx") && ( (id(sms_message).state == "Router_power_ON") ) ) {
+          id(reset_router).turn_off();
+          id(releu_router).publish_state(message);
+        };
+        
+    - lambda: |-
+        if ( (id(sms_sender).state == "+4073xxxxxxx") && ( (id(sms_message).state == "Server_power_OFF") ) ) {
+          id(reset_server).turn_on();
+          id(releu_server).publish_state(message);
+        };
+        
+    - lambda: |-
+        if ( (id(sms_sender).state == "+4073xxxxxxx") && ( (id(sms_message).state == "Server_power_ON") ) ) {
+          id(reset_server).turn_off();
+          id(releu_server).publish_state(message);
+        };
+        
+  on_incoming_call:
+    - lambda: |-
+        id(caller_id_text_sensor).publish_state(caller_id);
+  on_call_connected:
+    - logger.log:
+        format: Call connected
+  on_call_disconnected:
+    - logger.log:
+        format: Call disconnected
+  on_ussd_received:
+    - lambda: |-
+        id(ussd_message).publish_state(ussd);
+
+text_sensor:
+  - platform: template
+    id: sms_sender
+    name: "Sms Sender"
+  - platform: template
+    id: sms_message
+    name: "Sms Message"
+  - platform: template
+    id: caller_id_text_sensor
+    name: "Caller ID"
+  - platform: template
+    id: ussd_message
+    name: "Ussd Code"
+  - platform: template
+    id: releu_router
+    name: "Releu Router"
+  - platform: template
+    id: releu_server
+    name: "Releu Server"
